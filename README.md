@@ -13,22 +13,7 @@ This is a [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/propos
 # Participate
 - https://github.com/w3c-fedid/delegation/issues
 
-# Delegation-oriented FedCM
-
-This is an early proposal to unbundle issuance from presentation with the verifier-holder-issuer model to address the IdP tracking problem of social login by making the browser a holder.
-
-In this explainer we'll go over:
-
-* Background and motivation
-* Proposal
-  * The Verifier API
-  * The Issuer API
-    * The VC Issuance endpoint
-  * The Browser as a holder
-  * Relationship with other APIs
-* HOWTO
-
-## Background and motivation
+# Background and motivation
 
 > This is a copy/paste from this [intent-to-prototype](https://groups.google.com/a/chromium.org/g/blink-dev/c/rwu9wFl0mF4/m/MWYK64jgBQAJ?e=48417069).
 
