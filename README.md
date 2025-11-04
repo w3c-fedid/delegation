@@ -1,6 +1,6 @@
-# Delegation-oriented FedCM
+# Browser-as-IdP: Federated Credential Management
 
-This is a [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Identity Community Group](https://fedidcg.github.io/) to tackle the IdP Tracking problem in Social login.
+This is a [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Identity Community Group](https://fedidcg.github.io/) to enable browsers to act as first-class Identity Providers in peer-to-peer federated authentication.
 
 # Stage
 
@@ -13,432 +13,863 @@ This is a [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/propos
 # Participate
 - https://github.com/w3c-fedid/delegation/issues
 
-# Background and motivation
+# Background and Motivation
 
-> This is a copy/paste from this [intent-to-prototype](https://groups.google.com/a/chromium.org/g/blink-dev/c/rwu9wFl0mF4/m/MWYK64jgBQAJ?e=48417069).
+## The Evolution Beyond Delegation
 
-[Early on](https://github.com/w3c-fedid/FedCM/blob/main/meetings/2020/The%20Web%20Platform%2C%20Privacy%20and%20Federation%20-%20TPAC.pdf), we outlined a few important problems we wanted to address in federation: first and foremost [The Classification Problem](https://github.com/samuelgoto/WebID?tab=readme-ov-file#the-classification-problem) (the fact that browsers couldn’t tell the difference between federation and tracking), and then [The RP Tracking Problem](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-end-state) (the release of global identifiers, such as emails) and [The IdP Tracking problem](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-end-state) (the bundling of presentation with issuance).
+The original [FedCM](https://fedidcg.github.io/FedCM/) API and subsequent [delegation-oriented approaches](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-delegation-oriented-api) addressed critical privacy problems in federated identity:
 
-It wasn’t clear where we should start, so we looked at three different variations that had different trade-offs. We called them the [Mediation-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-mediated-oriented-api) model, the [Permission-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-permission-oriented-api) model and the [Delegation-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-delegation-oriented-api) model. 
+1. **The Classification Problem**: Browsers couldn't distinguish between tracking and legitimate federation
+2. **The RP Tracking Problem**: Identity providers released global identifiers (like email addresses)
+3. **The IdP Tracking Problem**: Identity providers could track which websites users logged into
 
-We learned quickly that it was key to start from the first two variations, because they were the most backwards compatible. So, the [Mediation-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-mediated-oriented-api) model and the [Permission-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-permission-oriented-api) model materialized - after many iterations - as FedCM’s mediated account chooser and the Storage Access API (by itself, or even [in conjunction with](https://github.com/explainers-by-googlers/storage-access-for-fedcm) FedCM). A series of [heuristics](https://github.com/amaliev/3pcd-exemption-heuristics/blob/main/explainer.md) were also put in place, which covers a lot of ground too, again optimizing for backwards compatibility with the Web.
+While delegation-oriented FedCM solved the IdP Tracking Problem by having the browser act as a "holder" that mediates between issuers and verifiers, it still required external identity providers to issue credentials. This proposal takes a fundamentally different approach: **the browser itself becomes the Identity Provider**.
 
-The [Mediation-oriented API](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-mediated-oriented-api), notably, was a great starting point because it (a) solved [The Classification Problem](https://github.com/samuelgoto/WebID?tab=readme-ov-file#the-classification-problem), (b) allowed solving the [The RP Tracking Problem](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-end-state) (with directed identifiers) and, importantly, (c) didn’t require any user experience or behavioral change (as opposed to the [Permission-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-permission-oriented-api) variation), allowing it to be deployed at large scales.
+## Why Make the Browser the IdP?
 
-So, while the first two variations optimized for backwards compatibility (and, between them, a trade-off between performance, extensibility and ergonomics), they had an inherent privacy design weakness: [The IdP Tracking problem](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-end-state).
+### The Peer-to-Peer Web
 
-That brings us to the [Delegation-oriented](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-delegation-oriented-api) model, which has great privacy properties in keeping IdPs blind, but requires us to redeploy a much larger part of the ecosystem: tens of thousands of relying parties.
+The web platform has evolved powerful new capabilities that enable browsers to operate as full-fledged identity providers:
 
-We are not sure yet whether the delegation-oriented model is actually within reach at this point, but a few stars aligned recently. For one, the introduction of the [issuer-holder-verifier](https://www.w3.org/TR/vc-data-model-2.0/#ecosystem-overview) architecture, together with the deployment of new token types like [SD-JWT+KB](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-selective-disclosure-jwt), made the unbundling of issuance from presentation a lot more accessible. Zero knowledge proofs have also advanced much since we started, giving us some hope that we could solve both the RP Tracking Problem and the IdP Tracking Problem at the same time.
+- **[Isolated Web Apps](https://github.com/WICG/isolated-web-apps)**: Provide strong origin isolation and cryptographic integrity
+- **[Direct Sockets](https://github.com/WICG/direct-sockets)**: Enable peer-to-peer networking without intermediary servers
+- **[WebMCP](https://github.com/modelcontextprotocol/mcp)**: Allows secure in-page protocol execution
+- **Browser Extensions**: Can act as trusted IdP contexts with `chrome-extension://{id}` origins
 
-Asides from the new externalities introduced, the development of the Mediation-oriented variation allowed us to stand on top of a much higher foundation compared to where we started from. The last 2-3 years of production experience of FedCM across thousands of websites and millions of users required us to design a series of features and extensions (e.g. [handling logged-out users](https://github.com/w3c-fedid/active-mode), [switching accounts](https://github.com/w3c-fedid/active-mode), [extensibility](https://github.com/w3c-fedid/custom-requests), [handling multiple idps at a time](https://github.com/w3c-fedid/multi-idp), [a registration mechanism](https://github.com/w3c-fedid/idp-registration), [the pull and push model](https://github.com/fedidcg/LightweightFedCM), and [a](https://github.com/w3c-fedid/FedCM/issues/553) [series](https://github.com/w3c-fedid/FedCM/issues/552) [of](https://github.com/w3c-fedid/FedCM/pull/498) [control](https://github.com/w3c-fedid/FedCM/pull/523) [knobs](https://github.com/w3c-fedid/FedCM/issues/352)) that we can build the delegation-oriented variation from.
+These technologies enable a **peer-to-peer federated identity model** where users control their identity directly through their browser, without requiring corporate identity providers.
 
-This is still early and ambiguous, so it is very possible it won’t go anywhere. Nonetheless, it is probably the closest that we have ever been, and close enough that it feels worth taking a shot.  [The explainer linked above](https://github.com/w3c-fedid/delegation/issues/1) has some notes of the overall idea that we’d like to start from.
+### Key Advantages
+
+1. **True User Sovereignty**: Users own and control their identity data locally in their browser
+2. **No Third-Party Tracking**: Neither RPs nor external IdPs can track users across sites
+3. **Offline-First Identity**: Users can authenticate without network connectivity to external IdPs
+4. **Reduced Infrastructure Costs**: No need to operate IdP infrastructure
+5. **Greater Privacy**: Identity data never leaves the user's device unless explicitly disclosed
+6. **Decentralization**: Breaks dependence on centralized identity providers
+7. **Interoperability**: Browser-issued credentials work across any site using the standard API
+
+## Use Cases
+
+### 1. Extension-Based Identity Providers
+
+Browser extensions running in isolated contexts (`chrome-extension://{id}`) can act as IdPs:
+
+```javascript
+// Extension background service worker acts as IdP
+chrome.identity.registerAsProvider({
+  name: "My Personal IdP",
+  accounts: [{
+    id: "user123",
+    email: "user@example.com",
+    name: "Alice Smith",
+    picture: "chrome-extension://abc123/profile.png"
+  }]
+});
+```
+
+### 2. Isolated Web App Identity Providers
+
+Installed web apps with cryptographic integrity can provide identity services:
+
+```javascript
+// Isolated Web App acting as IdP
+navigator.identity.provider.register({
+  origin: "isolated-app://myidp",
+  name: "Personal Identity Wallet",
+  capabilities: ["vc+sd-jwt", "mdoc"]
+});
+```
+
+### 3. In-Page Peer-to-Peer Authentication
+
+Using Direct Sockets, pages can establish direct peer-to-peer authentication:
+
+```javascript
+// Establish P2P connection for identity exchange
+const socket = new TCPSocket("peer.example.com", 8443);
+const credential = await navigator.credentials.get({
+  identity: {
+    mode: "p2p",
+    transport: socket,
+    fields: ["email", "name"]
+  }
+});
+```
+
+### 4. WebMCP Protocol-Based Identity
+
+Identity protocols can run directly in the browser context:
+
+```javascript
+// Use WebMCP to execute identity protocol in-page
+const mcp = await navigator.mcp.connect({
+  protocol: "openid-connect",
+  mode: "browser-idp"
+});
+
+const token = await mcp.authenticate({
+  claims: ["email", "name"],
+  audience: "https://rp.example"
+});
+```
 
 # Proposal
 
-Here is an end to end demo to give a sense of what this could look like. Instructions on how to use this [here](https://github.com/w3c-fedid/delegation/issues/1).
+## Architecture Overview
 
-https://github.com/user-attachments/assets/5de77f33-66fa-4d36-9e60-793aeebe7b85
+In the **Browser-as-IdP model**, we collapse the three-party model (Issuer-Holder-Verifier) into a **two-party peer-to-peer model**:
 
-Architecturally, here is more or less what we are proposing.  We'll break down this diagram into the following sections:
-
-* The Verifier API
-* The Issuer API
-  * The VC Issuance endpoint
-* The Browser as a holder
+- **Verifier** (Relying Party): The website requesting authentication
+- **Browser IdP** (User Agent): The browser itself, acting as the identity provider
 
 ```mermaid
 sequenceDiagram
-    participant website
-    participant browser
-    participant issuer
-    website->>browser: Give me a signed "sub" and "name", given "nonce"
-    browser<<->>issuer: Vanilla FedCM, creates an account chooser
-    browser->>browser: User selects account, choosing to Sign-in
-    browser->>browser: Generate ephemeral key pair
-    browser->>issuer: Issue me an SD-JWT bound to public key
-    issuer->>browser: Here
-    browser->>browser: Selectively disclose "sub" and "name"
-    browser->>browser: Bind "aud" and "nonce" with private key
-    browser->>browser: Throw away private key
-    browser->>website: Here is a SD-JWT-KB
-    website->>website: Checks issuer's signature
-    website->>website: Checks "aud" and "nonce"
-    website->>website: Accepts "sub" and "name"
+    participant RP as Relying Party
+    participant Browser as Browser (IdP)
+    participant User as User
+
+    RP->>Browser: Request credential (email, name)
+    Browser->>User: Show consent UI
+    User->>Browser: Approve sharing email & name
+    Browser->>Browser: Generate self-signed VC
+    Browser->>Browser: Create SD-JWT+KB with disclosed claims
+    Browser->>RP: Return signed credential
+    RP->>RP: Verify browser signature
+    RP->>RP: Accept identity claims
 ```
 
-## The Verifier API
+### Key Difference from Delegation Model
 
-In the three party model, the Identity Provider unbundles issuance from presentation, and delegates the latter to the browser. When it chooses to break itself into two parts, we’ll call the first an Issuer (rather than an Identity Provider) that delegates presentation to the second, a Holder (the browser), a now three party model (verifier-holder-issuer) rather than the two party model (rp-idp).
+| Aspect | Delegation Model | Browser-as-IdP Model |
+|--------|------------------|----------------------|
+| **Parties** | 3 (Issuer, Holder, Verifier) | 2 (Browser IdP, Verifier) |
+| **Credential Source** | External IdP | Browser itself |
+| **Trust Root** | IdP's signing key | Browser's signing key |
+| **Network Dependency** | Requires IdP connection | Fully offline capable |
+| **Privacy** | IdP blind to RP | No IdP exists to track |
+| **User Control** | Browser mediates | Browser owns identity |
 
-The three party model is compelling because it solves the [IdP Tracking Problem](https://github.com/w3c-fedid/FedCM/blob/main/explorations/proposal.md#the-end-state): the ability to login to websites without telling the Identity Provider.
+## Browser Identity Provider API
 
-The way this is constructed is by having the browser operate as a holder. The holder has to accept presentation requests from verifiers, accept provisioning requests from issuers and ask users permission for presentation.
+### 1. Browser Identity Registration
 
-To do so, it has to support a specific token format (e.g. SD-JWTs, MDocs and BBS) as well as an ontology (e.g. [OIDC’s standard claims](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), [HTML5’s autocomplete](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#attr-fe-autocomplete-name) as well as [FedCM’s profiles](https://w3c-fedid.github.io/FedCM/#dictdef-identityprovideraccount)), so that it knows how to compute the selective disclosure as well as how to ask the user’s for their permission. 
-
-For the sake of simplicity, let me start by anchoring on [SD-JWTs](https://www.ietf.org/archive/id/draft-ietf-oauth-selective-disclosure-jwt-14.html) and OIDC’s [standard claims](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), because that’s what’s most comparable to OIDC’s Id Tokens (which uses [JWT’s](https://en.wikipedia.org/wiki/JSON_Web_Token) \+ [standard claims](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), making the only delta the introduction of SD \- selective disclosures \- and KB to JWTs). 
-
-The verifier is given a new attribute, called `format`, that they can use to specify that they are looking for an `SD-JWT+KB` (rather than a traditional `idtoken` JWT):
+Browsers expose identity provider capabilities:
 
 ```javascript
-const {token} = await navigator.credentials.get({
+// Browser exposes its IdP capabilities
+if (navigator.identity.provider) {
+  console.log("This browser can act as an IdP");
+
+  // Register user identity locally
+  await navigator.identity.provider.register({
+    accounts: [{
+      id: crypto.randomUUID(),
+      email: "user@example.com",
+      name: "Alice Smith",
+      picture: "/profile.jpg",
+      // Claims are stored locally, encrypted at rest
+    }]
+  });
+}
+```
+
+### 2. Relying Party Request
+
+Websites request credentials from the browser IdP:
+
+```javascript
+const credential = await navigator.credentials.get({
   identity: {
-     mode: "active",
-     providers: [{
-       format: "vc+sd-jwt",
-       fields: ["email"], // I only need the user's email
-       nonce: "5678",
-       configURL: "https://idp.example/config.json",
-     }]
-  }
-});
-```
-
-When that format is used and supported by the issuer (see below how the issuer opts-in), the verifier gets what’s called an `SD-JWT+KB`.
-
-This is a three part token: first, a set of SD (selective disclosures), an Issuer-Signed JWT and a KB (proof of possession key binding).
-
-```javascript
-const {jwt, discloures, kb} = parseSdJwtKb(token);
-```
-
-First, the verifier gets an Issuer-signed JWT like it normally would for idtokens:
-
-```javascript
-// Jwt Header
-{
-  // Tells the verifier how to verify the issuer's signature
-  "alg" "ES256",
-  // Tells the verifier where to find the issuer's public key
-  "jku": "https://issuer.example/jku.json"
-  // Tells the verifier that this is an SD-JWT
-  "typ": "sd-jwt",
-}
-
-// Jwt Payload
-{
-  // Typical JWT attributes:
-  "iss": "https://issuer.example",
-  // The time this was issued
-  "iat": 2342342,
-  // The time when this token expires
-  "exp": 234342342,
-
-  // Notably, there are two key importants things that are deliberately
-  // removed:
-  //
-  // - The "aud" and "nonce" are missing. See KB below.
-  // - The "firstName", "email", "picture" standard claims. See discloures below.
-
-  // Instead, two other attributes do that job now:
-
-  // First, the holder's public key, who the issuer delegates "aud" and "nonce".
-  "cnf": {
-    "crv": "P-256",
-    "kty": "EC",
-    "x": "h29tWfkCJ73nJbP51C4SotdI0CuttfQS3Svt0se6gFU",
-    "y": "mBavlbiJLFhGsuIJRz7wYLiW15gpiWEDLjE1gfVh_7k"
-  },
-
-  // Second, selective disclosures digests, without the original values revealed.
-  // Also, delegated to the holder to disclose.
-  "_sd": [
-    "6phoD5MBMETkuf5BYia7JD01dubqJSwGuz-o_9M206E", 
-    "8jxEyPj9mMqJ6DQW6xiQrkyjryn77Sbuc2N44ScEGlE", 
-    "D45wfxz18dwlcKeuvFppyAPl4rc-WE2Fn3f5fg3W1Ow"
-  ],
-  "_sd_alg": "SHA-256"
-}
-
-// Jwt Signature
-"METkuf5BYi .... D5MBa7JD01du"
-```
-
-But then, in addition to the Issuer-signed JWT, the verifier gets two more things. First, a list of attributes that the user chose to disclose:
-
-```javascript
-["6403945e2c0a34a4", "firstName", "Alice"]
-["06cbb1a51984f444", "lastName", "Doe"]
-```
-
-You’ll probably notice that there are three parts here to each disclosure: a randomly generated salt (e.g. `6403945e2c0a34a4`), the disclosed field’s name (e.g. `firstName`) and the disclosed field’s value (e.g. `Alice`).
-
-The salt is used to create a random value that can be used to compute a value such that it can be included in the `_sd` property in the Issuer-signed JWT, making it hard to reverse (e.g. from the `_sd` values, a verifier can’t invert `firstName` \= Alice) but easy to verify (e.g. from `[salt, name, value]` it is easy to verify it was intended by the issuer):
-
-```javascript
-const digest = SHA256(disclosure),
-
-// Checks if the digest is included in the Issuer-signed JWT
-if (!token.jwt._sd.includes(digest)) {
-  throw Error("Disclosure didn't match")
-}
-```
-
-The last bit that the verifier gets is what’s called the Key Binding token. The Key Binding token is used to prevent replay attacks: the verifier’s server has to be convinced that the token that it gets was addressed to them and is recent (e.g. matches a nonce). If the Key Binding token wasn’t provided or required by the verifier, a malicious verifier could use a SD-JWT to send it to *another* verifier to "replay it" (e.g. authenticate a user in another verifier when the user intended to authenticate into the specific verifier).
-
-To do that, the verifier gets the following KB JWT:
-
-```javascript
-// Key Binding Jwt Header
-{
-  // Tells the verifier how to verify the signature
-  "alg": "ES256",
- 
-  // Tells the verifier that this is a Key Binding JWT
-  "typ": "kb+jwt",
-}
-
-// Key Binding Jwt Payload
-{
-  "aud": "https://verifier.example",
-  "nonce": "__a_verifier_provided_challenge__",
-}
-
-// Key Binding Jwt Signature
-"D5MBa7JD01du .... METkuf5BYi"
-```
-
-The `aud` and `nonce` fields allow the verifier to know that the SD-JWT+KB is addressed to them.
-
-The verifier also verifies that the signature matches the public key that was provided by the Issuer-signed JWT, so that it can’t be forged by anyone but the holder that the issuer trusted with this specific Issuer-signed JWT.
-
-## The Issuer API
-
-In order to hand to the verifier what it needs, the browser coordinates with a cooperative issuer (as it normally would for baseline FedCM).
-
-As baseline FedCM, the browser carries on as it normally would, all the way into the disclosure UI, but before the browser hits the `id_assertion_endpoint`.
-
-The `id_assertion_endpoint` reveals to the IdP who the RP is (e.g. through the CORS Origin request), so that’s a non-starter to use it as is.
-
-### The VC Issuance endpoint
-
-To avoid revealing to the IdP who the Rp is, we introduce an entirely new HTTP endpoint, say `vc_issuance_endpoint` (which is mostly like the `id_assertion_endpoint` except for the fact that it doesn’t tell to the Issuer who the RP is) which the IdP can opt-in to (along with the formats it can issue):
-
-```javascript
-// IdP's Config File
-{
-  // usual endpoints
-  "accounts_endpoint":  "...",
-  "id_assertion_endpoint":  "...",
-
-  // newly introduced vc_issuance_endpoint
-  "vc_issuance_endpoint":  "...",
-
-  // newly introduced parameter: tells the browser that
-  // the vc_issuance_endpoint can return VC+SD-JWTs.
-  "formats": ["vc+sd-jwt"],
-}
-```
-
-With this information in the configURL from a cooperating IdP, when the browser arrives at the end of the flow, it notes that the `format="vc+sd-jwt"` (rather than the default, `id_token`) was passed by the RP, informing it that it should hit the `vc_issuance_endpoint`, rather than the `id_assertion_endpoint`.
-
-For the `vc+sd-jwt` format, the browser releases only two things to the `vc_issuance_endpoint`:
-
-1) First, `account_id` that was selected and  
-2) Second, `holder_key`, a newly constructed public key of a public/private key pair, as a JWK  
-3) Third, the `format` that was requested by the RP (an enumeration of supported formats by the browser)
-
-| Parameter name | New? | Description |
-| :---- | :---- | :---- |
-| `account_id` | unchanged | unique ID of the signing in user. |
-| `holder_key` | **new** | A JWK, containing a public key generated by the browser to which the IDP will issue the VC. This public key is part of the issuer-signed VC payload. |
-| `format` | **new** | Credential Format Identifier string. For SD-JWT, this is `vc+sd-jwt`. The default value is `jwt`. In the future, we expect to add `mdoc`, and, possibly, `bbs`. |
-
-When the `vc_issuance_endpoint` gets this, it constructs an SD-JWT to return to the browser (by either returning a `token` or using the Continuation API).
-
-Here is an example of what that request looks like:
-
-```
-:method: POST
-:authority: issuer.example
-:scheme: https
-:path: /issue
-content-length: 225
-accept: application/json
-content-type: application/x-www-form-urlencoded
-origin: null
-sec-fetch-site: none
-sec-fetch-mode: no-cors
-sec-fetch-dest: webidentity
-user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36
-accept-encoding: gzip, deflate, br, zstd
-accept-language: en-US,en;q=0.9
-cookie: [3333 bytes were stripped]
-```
-
-You’ll note that nowhere in this request (headers or body) does the browser tell the issuer who the verifier is.
-
-Here is an example of what the end result might look like:
-
-```javascript
-eyJ0eXAiOiJzZCtqd3QiLCJhbGciOiJFUzI1NiJ9.eyJpZCI6IjEyMzQiLCJfc2QiOlsiNnBob0Q1TUJNRVRrdWY1QllpYTdKRDAxZHVicUpTd0d1ei1vXzlNMjA2RSIsIjhqeEV5UGo5bU1xSjZEUVc2eGlRcmt5anJ5bjc3U2J1YzJONDRTY0VHbEUiLCJENDV3Znh6MThkd2xjS2V1dkZwcHlBUGw0cmMtV0UyRm4zZjVmZzNXMU93Il0sIl9zZF9hbGciOiJTSEEtMjU2In0.T71daVMwfh9sd_9II_Wr67BHP4shOjhJ0vvqiC8tYrvTae8XirqnizIEpUoH7lEzKV5MaAlFZ8z2Tq5IRgXNfw~WyI2NDAzOTQ1ZTJjMGEzNGE0IiwiZmlyc3RuYW1lIiwiQWxpY2UiXQ~
-```
-
-## The Browser as a Holder
-
-When the browser gets this token, it goes over the [Fields](https://github.com/w3c-fedid/custom-requests/issues/4) that were requested and only releases the disclosures that were (a) requested by the verifier and (b) acknowledged by the user. 
-
-The browser, in possession of the SD-JWT, returns back to the Verifier the `<Issuer-signed JWT>` and the disclosure specifically for the specific fields and the KB:
-
-```javascript
-["f3e080eb88b5f735","email","alice@example.com"]
-```
-
-Because of replay attacks, the browser also signs the KB token with the audience (for scope) and the nonce (for freshness) provided by the RP:
-
-```javascript
-{
-  "aud": "https://verifier.example",
-  "nonce": "5678",
-}
-```
-
-Here is an example of the response that the browser would send to the Verifier as a result of JS call:
-
-```javascript
-<Issuer-signed JWT>~<Disclosure 1>~<Disclosure 2>~<KB-JWT>
-```
-
-The browser throws away the public/private key that it used, rather than storing it.
-
-The website, in possession with this token, can cryptographically get a signed assertion from the IdP, while keeping the IdP blind to this entire transaction. 
-
-Ta-da.
-
-### The Push Model
-
-As far as the browser is concerned, I think we could make this work equally well with the push model. I think it is awkward for IdPs who are going to have to keep the content fresh (and increase the expiration times of the credentials), but it would be equivalent to the “classic three party model”.
-
-Here is what this could look like:
-
-```javascript
-// Stores it in the browser
-await navigator.credentials.create({
-  identity: {
+    mode: "browser-idp",
+    context: {
+      // Accept credentials from browser itself
+      idpType: "browser",
+      // Or from browser extensions
+      idpType: "extension",
+      // Or from isolated web apps
+      idpType: "isolated-app"
+    },
     format: "vc+sd-jwt",
-    // uses the vc_issuance_endpoint defined in vc.json to
-    // issue a vc+sd-jwt ahead of a presentation request.
-    configURL:"https://issuer.example/vc.json",
+    fields: ["email", "name"],
+    nonce: crypto.randomUUID()
   }
 });
+
+// credential.token contains browser-signed SD-JWT+KB
 ```
 
-When RPs ask for the SD-JWT+KB, the browser can use the tokens that were issued ahead of time if they  aren’t expired (and fetch a new one if they are).
+### 3. Browser-Issued Credentials
 
-## Relationship with related APIs
-
-### Registration, Passive mode, Lightweight and Multi-IdP
-
-The intent here is that this proposal would seemingly  integrate with other parts of FedCM, most importantly the [Continuation API](https://github.com/w3c-fedid/custom-requests), [IdP Registration API](https://github.com/w3c-fedid/idp-registration), [Passive Mode](https://github.com/w3c-fedid/active-mode) and the [Multi-IDP API](https://github.com/w3c-fedid/multi-idp).  
-
-For example, if the Issuer wanted to get permission from the user dynamically with their own words (e.g. confirming trust in the holder) using HTML/CSS/JS they could use the [Continuation API](https://github.com/w3c-fedid/custom-requests/issues/1) before IdentityProvider.resolve() with a token.
-
-Here is how I think all of these things come together cohesively:
-
-At the issuer:
+The browser generates self-signed verifiable credentials:
 
 ```javascript
-// At https://issuer.com
+// Browser generates credential (internal process)
+{
+  // JWT Header
+  "typ": "vc+sd-jwt",
+  "alg": "ES256",
+  // Browser's public key location
+  "jku": "chrome://identity/keys.json"
+}
 
-// Tells the browser that the user is logged-in, and uses the lightweight mode to cache the accounts endpoint
-// See more information at: https://github.com/fedidcg/LightweightFedCM?tab=readme-ov-file#passive-mode-or-active-mode-without-fallback
-navigator.login.setStatus("logged-in", {
-  accounts: [{
-    name: "Sam",
-    email: "goto@google.com",
-    picture: "https://accounts.google.com/profile/goto/profile.jpg",
-  }]
+// JWT Payload
+{
+  "iss": "chrome://identity",  // Browser is the issuer
+  "sub": "user-123",
+  "iat": 1234567890,
+  "exp": 1234567900,
+
+  // Selective disclosure hashes
+  "_sd": [
+    "hash_of_email",
+    "hash_of_name"
+  ],
+  "_sd_alg": "SHA-256",
+
+  // Key binding for replay protection
+  "cnf": {
+    "jwk": { /* ephemeral public key */ }
+  }
+}
+```
+
+## Peer-to-Peer Federated Identity
+
+### Direct Socket Integration
+
+For true peer-to-peer scenarios, browsers can exchange credentials directly:
+
+```javascript
+// Peer 1: Establish identity server
+const server = new TCPServerSocket("0.0.0.0", 8443);
+server.onconnect = async (socket) => {
+  const request = await socket.read();
+
+  // Generate credential for peer
+  const credential = await navigator.identity.provider.issue({
+    fields: JSON.parse(request).claims,
+    audience: socket.remoteAddress
+  });
+
+  await socket.write(JSON.stringify(credential));
+};
+
+// Peer 2: Request credential from peer
+const socket = new TCPSocket("peer1.local", 8443);
+await socket.write(JSON.stringify({
+  claims: ["email", "name"]
+}));
+
+const credential = JSON.parse(await socket.read());
+```
+
+### WebMCP Identity Protocol
+
+Identity protocols can run in-browser using WebMCP:
+
+```javascript
+// MCP server runs in browser, handles identity requests
+const mcpServer = navigator.mcp.createServer({
+  name: "browser-identity-provider",
+  version: "1.0.0"
 });
 
-// Asks the user to register itself as an Issuer
-// More information at: https://github.com/w3c-fedid/idp-registration
-IdentityCredential.register("https://issuer.com/vc.json");
+mcpServer.onRequest("authenticate", async (params) => {
+  const credential = await navigator.identity.provider.issue({
+    fields: params.claims,
+    audience: params.audience,
+    format: params.format || "vc+sd-jwt"
+  });
 
-// Issues a User Info VC to the browser's holder
-// More information at: https://github.com/fedidcg/LightweightFedCM/issues/56#issuecomment-2542120956
-navigator.credentials.create({
+  return { credential };
+});
+
+// Client uses MCP to request identity
+const client = await navigator.mcp.connect("browser-identity-provider");
+const result = await client.request("authenticate", {
+  claims: ["email"],
+  audience: "https://rp.example"
+});
+```
+
+## Extension and Isolated App Support
+
+### Chrome Extension as IdP
+
+Extensions can register as identity providers using the `chrome-extension://{id}` scheme:
+
+```javascript
+// manifest.json
+{
+  "manifest_version": 3,
+  "name": "Personal Identity Provider",
+  "permissions": ["identity.provider"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
+
+// background.js
+chrome.identity.provider.register({
+  name: "My Personal IdP",
+  configURL: "chrome-extension://abc123def456/config.json",
+  accounts_endpoint: "chrome-extension://abc123def456/accounts",
+  vc_issuance_endpoint: "chrome-extension://abc123def456/issue",
+  formats: ["vc+sd-jwt", "mdoc"]
+});
+
+// Handle credential issuance
+chrome.identity.provider.onIssueRequest.addListener(async (request) => {
+  // request.account_id
+  // request.fields
+  // request.format
+
+  const credential = await generateCredential(request);
+  return credential;
+});
+```
+
+### Isolated Web App IdP
+
+Installed web apps with cryptographic integrity can act as IdPs:
+
+```javascript
+// In an Isolated Web App
+if (navigator.identity.provider) {
+  await navigator.identity.provider.register({
+    origin: self.origin, // isolated-app://...
+    name: "Decentralized Identity Wallet",
+
+    // IWA provides credential storage
+    storage: "isolated",
+
+    // Supports multiple formats
+    formats: ["vc+sd-jwt", "mdoc", "bbs"],
+
+    // IWA can use Direct Sockets for P2P
+    transports: ["https", "p2p"]
+  });
+}
+```
+
+## Enabling for Testing
+
+### Chrome Extension Scheme Support
+
+To enable testing with browser extensions as IdPs:
+
+```javascript
+// Chrome flag to enable (for testing)
+// chrome://flags/#enable-extension-idp
+
+// Or via command line
+// --enable-features=FedCmExtensionIdP
+
+// In FedCM config, allow extension origins
+const credential = await navigator.credentials.get({
   identity: {
-    configUrl: "https://issuer.com/vc.json",
+    providers: [{
+      configURL: "chrome-extension://abc123def456/fedcm.json",
+      clientId: "relying-party-123",
+      nonce: "xyz789"
+    }]
   }
 });
 ```
 
-At the verifier:
+### Configuration for Extension IdP
 
-```html
-<html>
-<script>
-// More information at: https://github.com/w3c-fedid/FedCM/issues/694
-const {token} = await navigator.credentials.get({
+```json
+// chrome-extension://abc123def456/fedcm.json
+{
+  "accounts_endpoint": "chrome-extension://abc123def456/accounts",
+  "client_metadata_endpoint": "chrome-extension://abc123def456/metadata",
+  "id_assertion_endpoint": "chrome-extension://abc123def456/assert",
+  "vc_issuance_endpoint": "chrome-extension://abc123def456/issue",
+
+  "formats": ["vc+sd-jwt"],
+
+  "branding": {
+    "background_color": "#1a73e8",
+    "color": "#ffffff",
+    "name": "Personal IdP"
+  }
+}
+```
+
+## Trust Model
+
+### Browser Signing Keys
+
+Each browser instance maintains cryptographic signing keys:
+
+```javascript
+// Browser-managed keypair (internal)
+{
+  "private_key": "stored in OS keychain",
+  "public_key": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "...",
+    "y": "..."
+  },
+  "key_id": "chrome://identity/keys/1"
+}
+```
+
+### Trust Establishment
+
+RPs can trust browser-issued credentials through several mechanisms:
+
+1. **Browser Vendor Signatures**: Major browsers sign their IdP public keys
+2. **Device Attestation**: Leverage platform attestation (TPM, Secure Enclave)
+3. **User Verification**: Biometric or PIN verification proves user presence
+4. **Reputation Systems**: Distributed trust networks validate browser identities
+
+```javascript
+// RP verifies browser credential
+async function verifyBrowserCredential(credential) {
+  const {jwt, disclosures, kb} = parseSdJwtKb(credential.token);
+
+  // 1. Verify issuer is a known browser
+  if (jwt.iss.startsWith("chrome://") ||
+      jwt.iss.startsWith("isolated-app://") ||
+      jwt.iss.startsWith("chrome-extension://")) {
+
+    // 2. Verify browser vendor signature on public key
+    const browserKey = await fetch(jwt.jku);
+    const isValidBrowser = await verifyBrowserVendorSignature(browserKey);
+
+    // 3. Verify JWT signature
+    const isValidJwt = await verifyJwtSignature(jwt, browserKey);
+
+    // 4. Verify key binding
+    const isValidKb = await verifyKeyBinding(kb, jwt.cnf.jwk);
+
+    // 5. Check audience and nonce
+    const isForUs = kb.aud === window.location.origin;
+    const isRecent = validateNonce(kb.nonce);
+
+    return isValidBrowser && isValidJwt && isValidKb && isForUs && isRecent;
+  }
+
+  throw new Error("Unknown issuer");
+}
+```
+
+## Implementation Examples
+
+### Example 1: Simple Browser IdP Login
+
+```javascript
+// Website requests authentication
+const button = document.getElementById('login');
+button.onclick = async () => {
+  try {
+    const credential = await navigator.credentials.get({
+      identity: {
+        mode: "browser-idp",
+        format: "vc+sd-jwt",
+        fields: ["email", "name"],
+        nonce: await generateNonce()
+      }
+    });
+
+    // Send to backend for verification
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: credential.token })
+    });
+
+    const session = await response.json();
+    console.log('Logged in:', session.user);
+
+  } catch (error) {
+    console.error('Authentication failed:', error);
+  }
+};
+```
+
+### Example 2: Extension-Based IdP
+
+```javascript
+// Extension provides identity for multiple personas
+chrome.identity.provider.register({
+  accounts: [
+    {
+      id: "personal",
+      email: "alice@personal.com",
+      name: "Alice Smith",
+      type: "personal"
+    },
+    {
+      id: "work",
+      email: "alice@company.com",
+      name: "Alice Smith",
+      type: "work"
+    }
+  ]
+});
+
+// User can choose which identity to use per site
+chrome.identity.provider.onAccountSelect.addListener((site, accounts) => {
+  // Show UI to select persona
+  return showPersonaSelector(site, accounts);
+});
+```
+
+### Example 3: P2P Authentication with Direct Sockets
+
+```javascript
+// Device A: Run identity server
+async function startIdentityServer() {
+  const server = new TCPServerSocket({ port: 8443 });
+
+  for await (const connection of server.connections) {
+    const request = await connection.readable.getReader().read();
+
+    // Generate credential for requesting peer
+    const credential = await navigator.identity.provider.issue({
+      fields: ["email", "publicKey"],
+      audience: connection.remoteAddress,
+      format: "vc+sd-jwt"
+    });
+
+    const writer = connection.writable.getWriter();
+    await writer.write(new TextEncoder().encode(
+      JSON.stringify(credential)
+    ));
+  }
+}
+
+// Device B: Request credential from peer
+async function authenticateWithPeer(peerAddress) {
+  const socket = new TCPSocket(peerAddress, 8443);
+
+  const writer = socket.writable.getWriter();
+  await writer.write(new TextEncoder().encode(JSON.stringify({
+    type: "credential_request",
+    claims: ["email", "publicKey"]
+  })));
+
+  const reader = socket.readable.getReader();
+  const response = await reader.read();
+  const credential = JSON.parse(
+    new TextDecoder().decode(response.value)
+  );
+
+  // Verify and use credential
+  return credential;
+}
+```
+
+## Security Considerations
+
+### Key Management
+
+- **Browser Keys**: Stored in OS-level secure storage (Keychain, Credential Manager, etc.)
+- **Extension Keys**: Isolated storage with extension permissions
+- **IWA Keys**: Cryptographically bound to app identity
+- **Rotation**: Periodic key rotation with backward compatibility
+
+### Privacy Protections
+
+1. **No Central Tracking**: No IdP exists to track user logins across sites
+2. **Selective Disclosure**: Users control exactly what claims are shared
+3. **Ephemeral Keys**: KB keys are single-use and discarded after authentication
+4. **Local Storage**: Identity data never leaves the device unless user consents
+5. **Origin Isolation**: Each RP receives isolated credentials
+
+### Attack Mitigation
+
+- **Phishing**: Browser UI clearly indicates local IdP vs. external
+- **Replay Attacks**: Nonce + KB binding prevents credential reuse
+- **Man-in-the-Middle**: TLS + key binding provides end-to-end integrity
+- **Cross-Site Tracking**: No correlation possible without user consent
+
+## Why This Is Better
+
+### Compared to Traditional IdPs
+
+| Aspect | Traditional IdP | Browser-as-IdP |
+|--------|----------------|----------------|
+| **Privacy** | IdP tracks all logins | Zero tracking |
+| **Availability** | Requires IdP uptime | Always available |
+| **Cost** | Infrastructure expenses | No infrastructure |
+| **Control** | IdP controls identity | User controls identity |
+| **Dependency** | Vendor lock-in | Decentralized |
+
+### Compared to Delegation Model
+
+| Aspect | Delegation Model | Browser-as-IdP |
+|--------|------------------|----------------|
+| **Complexity** | 3-party flow | 2-party flow |
+| **Network** | Requires IdP connection | Offline-capable |
+| **Trust** | Must trust external IdP | Trust local browser |
+| **Bootstrapping** | Needs IdP ecosystem | Works immediately |
+| **P2P Support** | Limited | Native |
+
+## Integration with Emerging Technologies
+
+### Direct Sockets API
+
+Enable direct peer-to-peer identity exchange:
+
+```javascript
+// Peer authentication without servers
+const peerCredential = await navigator.credentials.get({
   identity: {
-     mediation: "conditional",
-     providers: [{
-       type: "any", // accepts User Info VCs from anyone
-       format: "vc+sd-jwt", // takes SD-JWTs
-       fields: ["email"], // I just need the user's verified email address
-     }]
+    mode: "p2p",
+    transport: new TCPSocket(peerAddress, 8443),
+    fields: ["publicKey", "name"]
+  }
+});
+```
+
+### Isolated Web Apps
+
+Installed apps with strong security guarantees:
+
+```javascript
+// IWA acts as installed identity provider
+if (navigator.identity.provider.capabilities.isolated) {
+  // Can store credentials securely
+  // Has cryptographic identity
+  // Can use Direct Sockets for P2P
+}
+```
+
+### WebMCP
+
+Run identity protocols in-browser:
+
+```javascript
+// MCP-based identity protocol execution
+const idProtocol = await navigator.mcp.connect({
+  protocol: "openid4vp",
+  mode: "browser-idp"
+});
+
+const presentation = await idProtocol.request("presentCredential", {
+  format: "vc+sd-jwt",
+  fields: ["email"]
+});
+```
+
+### Browser Extensions
+
+Extensions as portable identity providers:
+
+```javascript
+// Extension syncs identity across devices
+chrome.storage.sync.set({
+  identities: encryptedIdentityData
+});
+
+// Extension provides IdP on any browser with extension installed
+chrome.identity.provider.register({
+  configURL: `chrome-extension://${chrome.runtime.id}/config.json`
+});
+```
+
+## Ecosystem Benefits
+
+### For Users
+
+- **Privacy**: No company tracks your logins
+- **Control**: You own your identity data
+- **Portability**: Works across any compliant browser
+- **Simplicity**: One identity, managed locally
+
+### For Developers
+
+- **No IdP Integration**: Just use the standard API
+- **Zero Cost**: No IdP service fees
+- **Offline**: Works without network connectivity
+- **Flexible**: Support any credential format
+
+### For the Web
+
+- **Decentralization**: Breaks IdP monopolies
+- **Innovation**: Anyone can build on top
+- **Privacy**: Stronger than any centralized solution
+- **Resilience**: No single point of failure
+
+## Migration Path
+
+### Phase 1: Browser Support (Current)
+
+- Major browsers implement Browser-as-IdP API
+- Extension IdP support with `chrome-extension://` scheme
+- Basic VC+SD-JWT format support
+
+### Phase 2: Developer Adoption
+
+- RPs update to accept browser-issued credentials
+- Verification libraries for browser credentials
+- Extension IdPs provide enhanced features
+
+### Phase 3: Ecosystem Maturity
+
+- Isolated Web Apps as identity wallets
+- P2P authentication with Direct Sockets
+- Cross-browser credential portability
+
+### Phase 4: Advanced Features
+
+- Zero-knowledge proofs for enhanced privacy
+- Multi-device synchronization
+- Distributed trust networks
+
+## Open Questions
+
+### How do we establish trust in browser-issued credentials?
+
+Several approaches are viable:
+
+1. **Browser Vendor Attestation**: Chrome/Firefox/Safari sign browser public keys
+2. **Device Attestation**: Leverage platform security (TPM, Secure Enclave)
+3. **Web of Trust**: Users attest to each other's browser identities
+4. **Hybrid Model**: Browser credentials bootstrap trust, then upgrade to stronger proofs
+
+### Should we support cross-browser credential portability?
+
+Yes, through several mechanisms:
+
+- **Standard Format**: VC+SD-JWT works across browsers
+- **Export/Import**: Users can move credentials between browsers
+- **Sync**: Extensions can sync across browser installations
+- **Federation**: Browsers can issue credentials recognizing other browsers
+
+### How do we handle account recovery?
+
+Multiple strategies:
+
+1. **Local Backup**: Encrypted backup to local storage
+2. **Cloud Backup**: Encrypted backup to user's cloud storage
+3. **Social Recovery**: M-of-N trusted contacts can help recover
+4. **Hardware Keys**: Backup to FIDO2 security keys
+
+### What about government-issued credentials?
+
+Browser-as-IdP can coexist with specialized wallets:
+
+- **Lightweight Claims**: Browser handles email, name, etc.
+- **High-Assurance Claims**: Government credentials go to dedicated wallets
+- **Interoperability**: Both work through same VC APIs
+
+### How does this work with existing FedCM deployments?
+
+Full backward compatibility:
+
+```javascript
+// Existing FedCM with external IdP
+const credential = await navigator.credentials.get({
+  identity: {
+    providers: [{
+      configURL: "https://idp.example/config.json"
+    }]
   }
 });
 
-// Got an email address from the autofill!
-// Creating a user account
-const account = await fetch("/create-account.php", token);
+// New Browser-as-IdP
+const credential = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp"
+  }
+});
 
-// Gets a free passkey with a conditional create
-// More information at: https://github.com/w3c-fedid/FedCM/issues/671
+// Let user choose
+const credential = await navigator.credentials.get({
+  identity: {
+    providers: [
+      { configURL: "https://google.com/fedcm.json" },
+      { mode: "browser-idp" },
+      { mode: "extension-idp" }
+    ]
+  }
+});
+```
+
+## Relationship with Other Proposals
+
+### Digital Credentials API
+
+Browser-as-IdP complements Digital Credentials:
+
+- **DC API**: Routes to external wallets
+- **Browser-as-IdP**: Browser IS the wallet
+- **Together**: Maximum flexibility for users
+
+### WebAuthn
+
+Natural integration:
+
+```javascript
+// Login with Browser IdP, get free passkey
+const credential = await navigator.credentials.get({
+  identity: { mode: "browser-idp" }
+});
+
+// Automatically create passkey for future
 await navigator.credentials.create({
   publicKey: {
-    user: account,
-    mediation: "conditional",
+    user: { id: credential.sub },
+    challenge: serverChallenge
   }
 });
-
-</script>
-
-Welcome to my website!
-
-Enter your email to create an account!
-<form action="/create-account.php">
-  <!-- User can either enter email manually or get a verified one through FedCM -->
-  <input type="email" autocomplete="email fedcm">
-  <input type="submit">
-</form>
-
-</html>
 ```
 
-# HOWTO
+### Storage Access API
 
-Can I play with this? Yes, instructions [here](https://github.com/w3c-fedid/delegation/issues/1).
+Complementary approaches:
 
-# Open Questions
+- **Storage Access**: Allows controlled access to cookies
+- **Browser-as-IdP**: Provides identity without cookies
+- **Together**: Migration path from cookie-based auth
 
-This problem has a lot of design choices that we are still trying to understand. Here are a few open questions:
+## HOWTO
 
-## Should we use ZKPs?
+### For Browser Implementers
 
-I think the answer is likely "yes", but the more interesting question is "which" and "how". BBS+ comes to mind as a first thought, but we haven't explored this space enough to understand how to use it. We would appreciate guidance here.
+1. Implement `navigator.identity.provider` API
+2. Add secure key storage for browser signing keys
+3. Support `chrome-extension://` scheme in FedCM
+4. Build consent UI for credential issuance
 
-## Should we support mDocs?
+### For Relying Parties
 
-I think the answer is also likely "yes". Besides zero knowledge proofs, we also have an intuition that we should support both SD-JWTs and mDocs. We started with SD-JWTs because there was better support in our codebase, but I think both could work equally well. If you know about any of these, we would love guidance if we are using them correctly too.
+1. Update credential requests to accept browser-issued credentials
+2. Implement verification for browser signatures
+3. Handle multiple IdP types (traditional, browser, extension)
 
-## Should we extend the Digital Credentials API?
+### For Extension Developers
 
-First, I think it is useful to acknowledge that this use case (Social login) could (and should) be helped by the Digital Credentials API *too*: we should encourage issuing User Info VCs to third party wallets and use them when available.
+1. Request `identity.provider` permission
+2. Implement IdP endpoints in extension
+3. Provide user management UI
+4. Handle credential issuance requests
 
-However, I think if we relied only on that we'd either (a) have a much harder ecosystem activation / bootstrapping structure, (b) have to give up on the privacy properties of the three party model or (c) re-invent FedCM.
+## Next Steps
 
-By that I mean: in (a) if we keep the current DC structure, it will have to presuppose that User Info VCs were issued to third party wallets ahead of time with enough penetration before this verifiers can call this reliably making it harder to bootstrap the ecosystem, in (b) if we keep the current DC structure, because the DC API connects with wallets, issuers will have to be bundled with holders in the same app - if you assume that (a) is a non-starter, which defeats the privacy properties that we are looking for or in (c) if we change the current DC structure, we'd have to re-invent the FedCM endpoints in it. 
+1. **Prototype Implementation**: Build in Chrome/Chromium
+2. **Extension IdP Demo**: Create sample extension IdP
+3. **RP Testing**: Work with early adopter websites
+4. **Security Review**: Comprehensive security analysis
+5. **Privacy Review**: Ensure no tracking vectors
+6. **Standardization**: Bring to W3C for formal standardization
 
-For a bit more context, architecturally, Chrome implements the Digital Credentials API as a "dumb pipe" to third party wallets where the browser plays the role of redirecting the request to third party wallets, without introspecting - by design - the request: originally, an alternative to custom schemes like `mdoc://` and `openid4vp://`. This has a lot of design advantages, because it allow an entire industry (e.g. OpenID4VP and various formats like mDocs and VCs) to innovate without asking for the browser's permission. FedCM, on the other hand, has the  browser a lot more involved with a tighter (and hopefully allowing for a better) integration (e.g. understanding and using every single bit of the request) at the cost of ossification.
+## Conclusion
 
-Specifically, FedCM already knows (a) [whether the user is logged in](https://w3c-fedid.github.io/login-status/) to a website or not and (b) [how to login the user to a websites](https://w3c-fedid.github.io/FedCM/#show-an-idp-login-dialog) when the user is logged-out as well as (c) gather [a list of accounts](https://w3c-fedid.github.io/FedCM/#fetch-accounts) without revealing who the RP is. Digital Credentials simply routes requests to wallets, so, so far, the intuition is that we'd have to re-invent these FedCM (e.g. the algorithms above) inside of Digital Credentials if we wanted to extend it. 
+The **Browser-as-IdP** model represents a fundamental shift in how we think about federated identity on the web. By making the browser itself an identity provider, we achieve:
 
-From an ecosystem activation energy perspective, there are a lot of benefits of having the neutral user-agent act as a holder: issuers can register with it with a lot less friction than they would register with a third-party wallet. This isn't applicable to a lot of cases  (e.g. government-issued credentials, issuers have one-off deals with wallets enforced by regulation), but we think is likely true for social login.
+- **Maximum Privacy**: No entity can track users across sites
+- **True Decentralization**: No dependence on corporate IdPs
+- **User Sovereignty**: Users own and control their identity
+- **Developer Simplicity**: Single standard API
+- **Ecosystem Innovation**: Extensions, IWAs, and P2P unlock new possibilities
 
-So, so far, the intuition so far is that, while FedCM and the DC API operate in a similar design space, the former is a high-level API for Social login and the other is an extensible low-level API across more use cases (e.g. birth certificates, drivers licenses, passports, etc), so, co-existing much like high-level APIs (e.g. `<p>`) and low-level APIs (e.g. `<canvas>`) co-exist in various parts of the Web Platform.
+With emerging technologies like Direct Sockets, Isolated Web Apps, and WebMCP, the browser becomes a powerful platform for decentralized identity. The `chrome-extension://{id}` scheme enablement provides an immediate path for experimentation and innovation.
 
-We are still learning from our prototype, so we'll keep an open mind about this architectural choice as we learn more about how they relate to one another.
+This proposal invites the community to reimagine federated identity—not as a relationship between websites and corporate identity providers, but as a peer-to-peer web where users and their browsers are in control.
