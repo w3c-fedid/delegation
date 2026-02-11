@@ -136,10 +136,12 @@ First, the verifier gets an Issuer-signed JWT like it normally would for idtoken
 
   // First, the holder's public key, who the issuer delegates "aud" and "nonce".
   "cnf": {
-    "crv": "P-256",
-    "kty": "EC",
-    "x": "h29tWfkCJ73nJbP51C4SotdI0CuttfQS3Svt0se6gFU",
-    "y": "mBavlbiJLFhGsuIJRz7wYLiW15gpiWEDLjE1gfVh_7k"
+    "jwk": {
+      "crv": "P-256",
+      "kty": "EC",
+      "x": "h29tWfkCJ73nJbP51C4SotdI0CuttfQS3Svt0se6gFU",
+      "y": "mBavlbiJLFhGsuIJRz7wYLiW15gpiWEDLjE1gfVh_7k"
+    }
   },
 
   // Second, selective disclosures digests, without the original values revealed.
