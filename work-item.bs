@@ -1,0 +1,642 @@
+<pre class="metadata">
+Title: Delegation API
+Shortname: delegation
+Level: None
+Status: CG-DRAFT
+Group: fedidcg
+Repository: w3c-fedid/delegation
+URL: https://w3c-fedid.github.io/delegation/
+Editor: Sam Goto, w3cid 50308, Google Inc. https://google.com, goto@google.com
+Abstract: This specification extends the Federated Credential Management API [[FEDCM]] so that an
+    identity provider can delegate the presentation of identity assertions to the user agent. The
+    identity provider acts as an <em>issuer</em> of a selectively disclosable credential bound to
+    a key that the user agent generates, and the user agent acts as a <em>holder</em> that
+    discloses only the claims the user agreed to share, bound to the relying party (the
+    <em>verifier</em>). This way, users can sign in to relying parties without the identity
+    provider learning which relying parties they sign in to.
+Markup Shorthands: markdown yes, css no
+Default Biblio Display: inline
+Text Macro: RP Relying Party
+Text Macro: IDP Identity Provider
+</pre>
+
+<pre class="biblio">
+{
+    "SD-JWT": {
+        "title": "Selective Disclosure for JWTs (SD-JWT)",
+        "href": "https://datatracker.ietf.org/doc/draft-ietf-oauth-selective-disclosure-jwt/",
+        "authors": ["Daniel Fett", "Kristina Yasuda", "Brian Campbell"],
+        "status": "Internet-Draft",
+        "publisher": "IETF"
+    },
+    "IDP-REGISTRATION": {
+        "title": "IdP Registration API",
+        "href": "https://w3c-fedid.github.io/idp-registration/",
+        "authors": ["Sam Goto"],
+        "status": "CG-DRAFT",
+        "publisher": "W3C"
+    }
+}
+</pre>
+
+<pre class="anchors">
+spec: fedcm; urlPrefix: https://w3c-fedid.github.io/FedCM/
+    type: dfn
+        text: IDP; url: idp
+        text: RP; url: rp
+        text: config file; url: config-file
+        text: accounts endpoint; url: accounts-endpoint
+        text: identity assertion endpoint; url: identity-assertion-endpoint
+        text: disconnect endpoint; url: disconnect-endpoint
+        text: create an IdentityCredential; url: create-an-identitycredential
+        text: create an IdentityCredentialError; url: create-an-identitycredentialerror
+        text: fetch the config file; url: fetch-the-config-file
+        text: fetch the client metadata; url: fetch-the-client-metadata
+        text: fetch an identity assertion; url: fetch-an-identity-assertion
+        text: create a list; for: fetch identity assertion; url: fetch-identity-assertion-create-a-list
+        text: show a continuation dialog; url: show-a-continuation-dialog
+        text: create a connection between the RP and the IdP account; url: create-a-connection-between-the-rp-and-the-idp-account
+        text: connected accounts set; url: connected-accounts-set
+        text: remove all connections; url: remove-all-connections
+        text: attempt to disconnect; url: attempt-to-disconnect
+        text: send a disconnect request; url: send-a-disconnect-request
+        text: list of recognized fields; url: list-of-recognized-fields
+        text: request permission to sign-up; url: request-permission-to-sign-up
+        text: computing the manifest URL; url: computing-the-manifest-url
+        text: extract the JSON fetch response; url: extract-the-json-fetch-response
+        text: fetch request; url: fetch-request
+        text: parse url; url: parse-url
+        text: well-known file; url: well-known-file
+</pre>
+
+<pre class="link-defaults">
+spec:infra; type:dfn; text:list
+spec:infra; type:dfn; text:user agent
+spec:infra; type:dfn; text:string
+spec:html; type:dfn; for:html-origin-def; text:origin
+spec:html; type:dfn; for:/; text:same site
+spec:url; type:dfn; for:/; text:url
+spec:fetch; type:dfn; for:/; text:request
+spec:fetch; type:dfn; for:/; text:response
+spec:infra; type:dfn; for:/; text:tuple
+</pre>
+
+<style>
+.monkeypatch {
+    border-left: 8px solid #8a6d3b;
+    background-color: rgba(138, 109, 59, 0.08);
+    margin: 16px 0;
+    padding: 8px 16px;
+}
+.monkeypatch::before {
+    content: "Monkey patch";
+    display: block;
+    font-weight: bold;
+    color: #8a6d3b;
+}
+</style>
+
+<!-- ============================================================ -->
+# Introduction # {#introduction}
+<!-- ============================================================ -->
+
+*This section is non-normative.*
+
+In [[FEDCM]], the user agent mediates sign-in between an [=RP=] and an [=IDP=], but the [=IDP=]
+still issues an identity assertion for a specific [=RP=] at its [=identity assertion endpoint=].
+That request tells the [=IDP=] which [=RP=] the user is signing in to (the *IdP Tracking
+Problem*).
+
+This specification lets an [=IDP=] split itself in two, following the issuer-holder-verifier model
+of Verifiable Credentials:
+
+* The [=IDP=] becomes an <dfn>issuer</dfn>. Instead of an identity assertion for a specific
+    [=RP=], it issues a selectively disclosable credential (an SD-JWT [[SD-JWT]]) bound to a key
+    that the user agent generates. The issuer doesn't learn who the [=RP=] is.
+* The [=user agent=] becomes the <dfn>holder</dfn>. It discloses only the claims that the [=RP=]
+    asked for and that the user agreed to share, and binds the result to the [=RP=] and to a
+    challenge from it (an SD-JWT+KB). Then it throws the key away.
+* The [=RP=] becomes the <dfn>verifier</dfn>. It checks the issuer's signature, the disclosures,
+    and the key binding.
+
+An [=IDP=] opts in by using a [=VC issuance endpoint=] instead of an [=identity assertion
+endpoint=] in its [=config file=]:
+
+<div class="example" id="example-config">
+```json
+{
+  "accounts_endpoint": "/accounts",
+  "login_url": "/login",
+  "vc_issuance_endpoint": "/issue"
+}
+```
+</div>
+
+An [=RP=] opts in by choosing the config URL of such a [=config file=]. Nothing else in its request
+changes, except that it passes a {{IdentityProviderRequestOptions/nonce}} for the key binding:
+
+<div class="example" id="example-rp-request">
+```js
+const {token} = await navigator.credentials.get({
+  identity: {
+    providers: [{
+      configURL: "https://issuer.example/vc.json",
+      fields: ["email"],
+      nonce: "5678"
+    }]
+  }
+});
+```
+</div>
+
+The flow is the same as in [[FEDCM]] until the user selects an account. Then:
+
+1. The user agent generates an ephemeral key pair, the [=holder key=].
+1. The user agent sends the selected account's ID and the public [=holder key=] to the
+    [=VC issuance endpoint=], with the user's cookies but without anything that identifies the
+    [=RP=].
+1. The issuer returns an SD-JWT bound to the public [=holder key=], with the user's claims as
+    selective disclosures.
+1. The user agent keeps only the disclosures that the [=RP=] asked for and the user agreed to
+    share, and signs a key binding JWT with the [=RP=]'s origin as its audience and the [=RP=]'s
+    nonce. Then it discards the private [=holder key=].
+1. The [=RP=] receives the SD-JWT+KB in {{IdentityCredential/token}}.
+
+Note: This specification is meant to compose with other FedCM extensions. For example, with
+[[IDP-REGISTRATION]], an [=RP=] could accept a [=delegated credential=] from any registered
+[=issuer=], while keeping that [=issuer=] from learning who the [=RP=] is.
+
+Issue: Should [=issuers=] be able to issue [=delegated credentials=] ahead of time (the "push
+model"), so that the user agent can present them without contacting the [=issuer=] during
+sign-in?
+
+This specification is written as a set of monkey patches to [[FEDCM]], shown like this:
+
+<div class="monkeypatch">
+A change to an algorithm or definition in another specification.
+
+</div>
+
+<!-- ============================================================ -->
+# Issuers # {#issuers}
+<!-- ============================================================ -->
+
+## The config file ## {#config-file-section}
+
+<xmp class="idl">
+partial dictionary IdentityProviderAPIConfig {
+  USVString vc_issuance_endpoint;
+};
+</xmp>
+
+<dl dfn-type="dict-member" dfn-for="IdentityProviderAPIConfig">
+    :   <dfn>vc_issuance_endpoint</dfn>
+    ::  The URL of the [=issuer=]'s [=VC issuance endpoint=], relative to the [=config file=].
+</dl>
+
+The {{IdentityProviderAPIConfig/vc_issuance_endpoint}} and the
+{{IdentityProviderAPIConfig/id_assertion_endpoint}} are mutually exclusive: a [=config file=] has
+one or the other. A [=config file=] that has a {{IdentityProviderAPIConfig/vc_issuance_endpoint}}
+is a <dfn>delegated config</dfn>. If a [=config file=] has both, the
+{{IdentityProviderAPIConfig/vc_issuance_endpoint}} is used, and the
+{{IdentityProviderAPIConfig/id_assertion_endpoint}} is ignored.
+
+Note: An [=RP=] chooses whether it gets an identity assertion or a delegated credential by choosing
+a config URL. An [=IDP=] that supports both publishes two [=config files=], for example
+`config.json` and `vc.json`. Both can pass the [=well-known file=] check if the
+[=well-known file=] lists the {{IdentityProviderWellKnown/accounts_endpoint}} and
+{{IdentityProviderWellKnown/login_url}} that they share, rather than a single
+{{IdentityProviderWellKnown/provider_urls}} entry.
+
+<div class="monkeypatch">
+In [[FEDCM]], remove the `required` keyword from the
+{{IdentityProviderAPIConfig/id_assertion_endpoint}} member of {{IdentityProviderAPIConfig}}.
+
+In [=fetch the config file=], after the step that converts the response to an
+{{IdentityProviderAPIConfig}} stored in <var ignore>config</var>, add the following step:
+
+1. If neither <var ignore>config</var>["{{IdentityProviderAPIConfig/id_assertion_endpoint}}"] nor
+    <var ignore>config</var>["{{IdentityProviderAPIConfig/vc_issuance_endpoint}}"]
+    [=map/exists=], set <var ignore>config</var> to failure.
+
+</div>
+
+## The VC issuance endpoint ## {#vc-issuance-endpoint-section}
+
+The <dfn>VC issuance endpoint</dfn> is like the [=identity assertion endpoint=], except that it
+doesn't learn who the [=RP=] is. The user agent sends it a `POST` request, with the user's cookies,
+with an opaque `Origin`, and without a referrer. The request body is
+`application/x-www-form-urlencoded` with the following parameters, and nothing else:
+
+<dl>
+    :   `account_id`
+    ::  The {{IdentityProviderAccount/id}} of the account the user selected, as for the
+        [=identity assertion endpoint=].
+    :   `holder_key`
+    ::  The public [=holder key=], serialized as a JSON Web Key [[RFC7517]].
+</dl>
+
+<div class="example" id="example-vc-issuance-request">
+```http
+POST /issue HTTP/1.1
+Host: issuer.example
+Origin: null
+Accept: application/json
+Content-Type: application/x-www-form-urlencoded
+Sec-Fetch-Dest: webidentity
+Cookie: 0x23223
+
+account_id=123&holder_key=%7B%22kty%22%3A%22EC%22%2C%22crv%22%3A%22P-256%22%2C%22x%22%3A%22...%22%2C%22y%22%3A%22...%22%7D
+```
+</div>
+
+Note: Unlike the request to the [=identity assertion endpoint=], this request doesn't include
+`client_id`, `params`, `fields`, `disclosure_text_shown`, `disclosure_shown_for`, or
+`is_auto_selected`, and its `Origin` is opaque, because any of those could reveal the [=RP=].
+
+The endpoint responds as the [=identity assertion endpoint=] does, with an
+{{IdentityAssertionResponse}}. Its {{IdentityAssertionResponse/token}} is a [=delegated
+credential=]. The [=issuer=] can also use {{IdentityAssertionResponse/continue_on}} to show its own
+UI first, as with the [=identity assertion endpoint=], or {{IdentityAssertionResponse/error}}.
+
+A <dfn>delegated credential</dfn> is an SD-JWT [[SD-JWT]], serialized as a [=string=] in the
+compact form `<Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~`, such that:
+
+* The Issuer-signed JWT has an `iss` claim identifying the [=issuer=], and SHOULD have `iat` and
+    `exp` claims.
+* The Issuer-signed JWT has a `cnf` claim [[RFC7800]] whose `jwk` member is the `holder_key` from
+    the request.
+* The Issuer-signed JWT doesn't have `aud` or `nonce` claims. The holder adds those in the key
+    binding JWT ([[#presenting]]).
+* Each of the user's claims is a selectively disclosable top-level claim, rather than a claim in
+    the clear, named with the same taxonomy that [=RPs=] use to request them: the field names in
+    FedCM's [=list of recognized fields=] (`"name"`, `"email"`, `"tel"`, `"username"`, and
+    `"picture"`). Each claim's value has the same meaning as the {{IdentityProviderAccount}} member
+    of the same name.
+
+<div class="example" id="example-delegated-credential">
+The payload of the Issuer-signed JWT:
+
+```json
+{
+  "iss": "https://issuer.example",
+  "iat": 1760295600,
+  "exp": 1760299200,
+  "cnf": {
+    "jwk": {"kty": "EC", "crv": "P-256", "x": "...", "y": "..."}
+  },
+  "_sd": ["6phoD5MBMETkuf5BYia7JD01dubqJSwGuz-o_9M206E", "..."],
+  "_sd_alg": "sha-256"
+}
+```
+
+And its disclosures, before base64url encoding:
+
+```json
+["6403945e2c0a34a4", "name", "Alice Doe"]
+["f3e080eb88b5f735", "email", "alice@example.com"]
+```
+</div>
+
+Note: Because the [=issuer=] names its disclosures with the same field names that [=RPs=] request,
+the user agent doesn't need to map between taxonomies: it discloses a claim if its name is one of
+the requested fields.
+
+Issue: How are nested claims and array elements handled? How is the taxonomy extended beyond the
+[=list of recognized fields=]?
+
+Issue: How does a [=verifier=] find the [=issuer=]'s public keys? Options include the `jku` header,
+the `jwks_uri` of the [=issuer=]'s metadata, or a well-known location keyed by `iss`.
+
+Issue: Claims that the [=issuer=] puts in the clear, such as a stable `sub`, are revealed to every
+[=RP=]. See [[#privacy]].
+
+<!-- ============================================================ -->
+# Verifiers # {#verifiers}
+<!-- ============================================================ -->
+
+## Requesting a delegated credential ## {#requesting}
+
+An [=RP=] requests a [=delegated credential=] by passing the config URL of a [=delegated config=].
+It doesn't pass a new parameter to choose the credential's format.
+
+<xmp class="idl">
+partial dictionary IdentityProviderRequestOptions {
+  USVString nonce;
+};
+</xmp>
+
+<dl dfn-type="dict-member" dfn-for="IdentityProviderRequestOptions">
+    :   <dfn>nonce</dfn>
+    ::  A challenge from the [=RP=], which the holder puts in the key binding JWT so that the
+        [=RP=] can check that the presentation is fresh. It is required when the
+        {{IdentityProviderConfig/configURL}} points to a [=delegated config=], and is never sent
+        to the [=IDP=].
+</dl>
+
+Note: In [[FEDCM]], an [=RP=] passes its nonce in {{IdentityProviderRequestOptions/params}}, which
+is sent to the [=identity assertion endpoint=]. For a [=delegated config=],
+{{IdentityProviderRequestOptions/params}} is never sent to the [=IDP=], because it could identify
+the [=RP=]. So the nonce needs its own member, which only the holder reads.
+
+<div class="monkeypatch">
+In [[FEDCM]], remove the `required` keyword from the {{IdentityProviderConfig/clientId}} member of
+{{IdentityProviderConfig}}. Every algorithm in [[FEDCM]] that reads
+{{IdentityProviderConfig/clientId}} MUST first check that the member [=map/exists=], and treat its
+absence as failure, unless the provider's [=config file=] is a [=delegated config=].
+
+</div>
+
+Note: An [=RP=] doesn't need to register with an [=issuer=] to get a [=delegated credential=],
+because the [=issuer=] never learns who the [=RP=] is. A {{IdentityProviderConfig/clientId}} that
+the [=RP=] passes is never sent to the [=issuer=].
+
+## Verifying a delegated credential ## {#verifying}
+
+*This section is non-normative.*
+
+The [=RP=] receives the [=delegated credential=] in {{IdentityCredential/token}}, as a [=string=]
+in the compact form `<Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure M>~<KB-JWT>` [[SD-JWT]].
+To verify it, the [=RP=]:
+
+1. Verifies the signature of the Issuer-signed JWT with the [=issuer=]'s public key, checks that
+    `iss` is the [=issuer=] it expects (for example, by comparing it with
+    {{IdentityCredential/configURL}}), and checks `exp`.
+1. For each disclosure, checks that its digest is in the Issuer-signed JWT's `_sd`.
+1. Verifies the signature of the KB-JWT with the key in the Issuer-signed JWT's `cnf.jwk`.
+1. Checks that the KB-JWT's `aud` is its own origin, that its `nonce` is the
+    {{IdentityProviderRequestOptions/nonce}} it passed, that its `iat` is recent, and that its
+    `sd_hash` matches the rest of the presentation.
+1. Accepts the disclosed claims.
+
+<!-- ============================================================ -->
+# The user agent as a holder # {#holder-section}
+<!-- ============================================================ -->
+
+This section defines how the user agent acts as the [=holder=]: it generates a [=holder key=],
+fetches a [=delegated credential=] from the [=VC issuance endpoint=], and presents it to the [=RP=].
+
+## Holder keys ## {#holder-keys}
+
+A <dfn>holder key</dfn> is an ECDSA key pair on the P-256 curve, used with the `ES256` algorithm,
+that the user agent generates for a single sign-in. The user agent MUST generate a new
+[=holder key=] for each request to a [=VC issuance endpoint=], MUST NOT reveal its private key to
+anyone, and MUST discard its private key as soon as it has signed the key binding JWT.
+
+Note: Because each [=holder key=] is new, the public key that the [=issuer=] sees can't be used to
+link sign-ins together, or to the [=RP=] that receives the presentation.
+
+Issue: Should user agents support other algorithms? Should the [=issuer=] be able to say which
+ones it accepts?
+
+## Fetching a delegated credential ## {#fetching}
+
+<div algorithm>
+To <dfn>fetch a delegated credential</dfn> given a [=string=] |accountId|, an
+{{IdentityProviderRequestOptions}} |provider|, an
+{{IdentityProviderAPIConfig}} |config|, and a |globalObject|, run the following steps. This returns
+a [=tuple=] of (a [=string=] token, a [=string=] account ID), or failure.
+
+1. If |provider|["{{IdentityProviderRequestOptions/nonce}}"] doesn't [=map/exist=], return
+    failure.
+1. Let |issuanceUrl| be the result of [=computing the manifest URL=] given |provider|,
+    |config|["{{IdentityProviderAPIConfig/vc_issuance_endpoint}}"], and |globalObject|. If
+    |issuanceUrl| is failure, return failure.
+1. Let |holderKey| be a new [=holder key=].
+1. Let |list| be « ("`account_id`", |accountId|), ("`holder_key`", the JSON Web Key [[RFC7517]]
+    serialization of |holderKey|'s public key) ».
+1. Let |requestBody| be the result of running the [=urlencoded serializer=] with |list|.
+1. Let |request| be a new [=request=] as follows:
+
+    :   [=request/URL=]
+    ::  |issuanceUrl|
+    :   [=request/method=]
+    ::  `POST`
+    :   [=request/body=]
+    ::  the [=UTF-8 encode|UTF-8 encoding=] of |requestBody|
+    :   [=request/redirect mode=]
+    ::  "`error`"
+    :   [=request/client=]
+    ::  null
+    :   [=request/service-workers mode=]
+    ::  "`none`"
+    :   [=request/destination=]
+    ::  "`webidentity`"
+    :   [=request/origin=]
+    ::  a new [=opaque origin=]
+    :   [=request/header list=]
+    ::  a [=list=] containing a header named `Accept` with value `application/json`, and a header
+        named `Content-Type` with value `application/x-www-form-urlencoded`
+    :   [=request/referrer policy=]
+    ::  "`no-referrer`"
+    :   [=request/credentials mode=]
+    ::  "`include`"
+    :   [=request/mode=]
+    ::  "`no-cors`"
+
+1. Let |sdJwt| be null.
+1. [=Fetch request=] with |request| and |globalObject|, and with <var ignore>processResponseConsumeBody</var>
+    set to the following steps given a [=response=] |response| and |responseBody|:
+    1. If |responseBody| is null or failure, or |response|'s [=response/status=] is not an
+        [=ok status=], set |sdJwt| to failure and return.
+    1. Let |json| be the result of [=extract the JSON fetch response=] from |response| and
+        |responseBody|.
+    1. [=converted to an IDL value|Convert=] |json| to an {{IdentityAssertionResponse}}, |result|.
+    1. If one of the previous two steps threw an exception, or
+        |result|["{{IdentityAssertionResponse/error}}"] [=map/exists=], set |sdJwt| to failure and
+        return.
+    1. If |result|["{{IdentityAssertionResponse/token}}"] [=map/exists=], set |sdJwt| to it and
+        return.
+    1. If |result|["{{IdentityAssertionResponse/continue_on}}"] [=map/exists=], run these steps
+        [=in parallel=]:
+        1. Let |continueOnUrl| be the result of running [=parse url=] with
+            |result|["{{IdentityAssertionResponse/continue_on}}"] and |globalObject|.
+        1. If |continueOnUrl| is failure, or it is not [=same origin=] with |issuanceUrl|, set
+            |sdJwt| to failure and return.
+        1. Let |tokenPair| be the result of [=show a continuation dialog=] with |continueOnUrl|.
+        1. If |tokenPair| is failure, set |sdJwt| to failure and return.
+        1. Set |sdJwt| to the first entry of |tokenPair|. If the second entry of |tokenPair| is not
+            null, set |accountId| to it.
+    1. Otherwise, set |sdJwt| to failure.
+1. Wait for |sdJwt| to be set.
+1. If |sdJwt| is failure or is not a [=string=], return failure.
+1. Let |token| be the result of [=present a delegated credential=] with |sdJwt|, |holderKey|,
+    |provider|, and |globalObject|.
+1. Discard |holderKey|'s private key.
+1. If |token| is failure, return failure.
+1. Return (|token|, |accountId|).
+
+</div>
+
+Issue: The continuation dialog is opened from the [=RP=]'s page. Check that nothing in it (for
+example, the opener or the referrer) reveals the [=RP=] to the [=issuer=].
+
+## Presenting a delegated credential ## {#presenting}
+
+<div algorithm>
+To <dfn>present a delegated credential</dfn> given a [=string=] |sdJwt|, a [=holder key=]
+|holderKey|, an {{IdentityProviderRequestOptions}} |provider|, and a |globalObject|, run the following steps. This returns a [=string=] or failure.
+
+1. Let |parts| be the result of [=strictly split|strictly splitting=] |sdJwt| on "`~`".
+1. If |parts| has fewer than 2 [=list/items=], or its last [=list/item=] isn't the empty string,
+    return failure.
+
+    Note: The last item being empty means |sdJwt| doesn't already have a key binding JWT.
+1. Let |issuerJwt| be |parts|[0], and |disclosures| be the remaining [=list/items=] of |parts|
+    except the last.
+1. Let |payload| be the result of decoding the payload of |issuerJwt| as a JWT [[RFC7519]]. If
+    that fails, return failure.
+1. If |payload|["`cnf`"]["`jwk`"] doesn't [=map/exist=], or isn't the same key as |holderKey|'s
+    public key (for example, by comparing their JWK thumbprints [[RFC7638]]), return failure.
+1. Let |hashAlgorithm| be |payload|["`_sd_alg`"] if it [=map/exists=], and "`sha-256`" otherwise.
+    If the user agent doesn't support |hashAlgorithm|, return failure.
+1. Let |fields| be |provider|["{{IdentityProviderRequestOptions/fields}}"] if it [=map/exists=],
+    and « "`name`", "`email`", "`picture`" » otherwise.
+1. Let |allowedNames| be the [=list/items=] of |fields| that are in the
+    [=list of recognized fields=].
+1. Let |selected| be an empty [=list=].
+1. [=list/For each=] |disclosure| of |disclosures|:
+    1. Let |decoded| be the result of base64url-decoding |disclosure| and parsing it as JSON. If
+        that fails, or |decoded| isn't an array of 3 elements whose second element is a
+        [=string=], [=iteration/continue=].
+    1. If |allowedNames| doesn't [=list/contain=] |decoded|[1], [=iteration/continue=].
+    1. If the base64url encoding of the |hashAlgorithm| digest of |disclosure| isn't in
+        |payload|["`_sd`"], [=iteration/continue=].
+    1. [=list/Append=] |disclosure| to |selected|.
+1. Let |presented| be |issuerJwt|, followed by "`~`", followed by the [=list/items=] of |selected|
+    each followed by "`~`".
+1. Let |kbJwt| be a JWT [[RFC7519]], signed with |holderKey|'s private key using `ES256`
+    [[RFC7515]], whose header is `{"typ": "kb+jwt", "alg": "ES256"}` and whose payload has the
+    following claims:
+
+    :   `iat`
+    ::  The current time, in seconds since the epoch.
+    :   `aud`
+    ::  The [=ASCII serialization of an origin|serialization=] of |globalObject|'s
+        [=associated Document=]'s [=Document/origin=].
+    :   `nonce`
+    ::  |provider|["{{IdentityProviderRequestOptions/nonce}}"].
+    :   `sd_hash`
+    ::  The base64url encoding of the |hashAlgorithm| digest of |presented|.
+
+1. Return |presented| followed by |kbJwt|.
+
+</div>
+
+Note: [=Fetch an identity assertion=] is only reached after the user agreed to share
+the [=RP=]'s {{IdentityProviderRequestOptions/fields}}, or after an earlier sign-in that
+[=create a connection between the RP and the IdP account|connected=] the account to the [=RP=].
+The user agent never discloses more than the fields the [=RP=] requested.
+
+Issue: When the user agent doesn't ask for permission (for example, for a returning user), should the user
+agent disclose the fields that the user agreed to share last time, rather than the fields that the
+[=RP=] requests now?
+
+Issue: Should the user agent reject a [=delegated credential=] that has the user's claims in the
+clear, since it can't keep them from the [=RP=]?
+
+## Changes to FedCM ## {#fedcm-changes}
+
+<div class="monkeypatch">
+In [=fetch an identity assertion=], insert the following steps at the beginning:
+
+1. If <var ignore>config</var> is a [=delegated config=]:
+    1. Let |result| be the result of [=fetch a delegated credential=] with
+        <var ignore>accountId</var>, <var ignore>provider</var>, <var ignore>config</var>, and <var ignore>globalObject</var>.
+    1. If |result| is failure, [=queue a global task=] on the [=DOM manipulation task source=]
+        given <var ignore>globalObject</var> to let <var ignore>error</var> be the result of
+        [=create an IdentityCredentialError=] given {} and <var ignore>globalObject</var>. Wait
+        for <var ignore>error</var> to be set, and return it.
+    1. Set <var ignore>tokenValue</var> to |result|'s first item and <var ignore>accountId</var>
+        to its second item, and continue with the step "If <var ignore>isAutoSelected</var> is
+        false, [=create a connection between the RP and the IdP account=]", skipping the steps in
+        between.
+
+</div>
+
+Note: The connection is stored only in the user agent's [=connected accounts set=]. The
+[=issuer=] doesn't learn about it.
+
+<div class="monkeypatch">
+In [=create an IdentityCredential=], in the step that sets
+<var ignore>clientMetadataMap</var>[<var ignore>configURL</var>] to the result of
+[=fetch the client metadata=], add the condition "and <var ignore>provider</var>'s [=config file=]
+is not a [=delegated config=]".
+
+</div>
+
+Note: Fetching the client metadata sends `client_id` to the [=IDP=], which would reveal the [=RP=].
+Without it, [=request permission to sign-up=] doesn't show the [=RP=]'s privacy policy or terms of
+service. The user agent can still tell whether the [=RP=] is third-party to the top-level frame by
+itself, without the `client_is_third_party_to_top_frame_origin` value from the [=IDP=].
+
+Issue: Where should a [=verifier=]'s privacy policy and terms of service come from, if not from the
+[=IDP=]? For example, the [=RP=] could pass them itself.
+
+<div class="monkeypatch">
+In [=attempt to disconnect=], after the step that fetches the [=config file=] into
+<var ignore>config</var>, insert the following step:
+
+1. If <var ignore>config</var> is a [=delegated config=], [=remove all connections=] given the
+    embedder origin, the [=RP=] origin, and the [=IDP=] origin, as computed later in this
+    algorithm, [=resolve=] <var ignore>promise</var>, and return.
+
+</div>
+
+Note: The [=disconnect endpoint=] is never fetched for a [=delegated config=], because
+[=send a disconnect request=] sends `client_id` to the [=IDP=], and the [=IDP=] has nothing to
+disconnect: it never learned about the connection.
+
+<!-- ============================================================ -->
+# Privacy considerations # {#privacy}
+<!-- ============================================================ -->
+
+<table class="data">
+<thead><tr><th>Request<th>Credentials<th>Reveals the RP?
+<tbody>
+<tr><td>[=Config file=] and [=well-known file=]<td>No<td>No
+<tr><td>[=Accounts endpoint=]<td>Yes<td>No
+<tr><td>Client metadata endpoint<td colspan=2>Not fetched for a [=delegated config=]
+<tr><td>[=VC issuance endpoint=]<td>Yes<td>No
+<tr><td>[=Disconnect endpoint=]<td colspan=2>Not fetched for a [=delegated config=]
+</table>
+
+* **What the [=issuer=] learns.** The [=issuer=] learns that the user signed in somewhere, which
+    account they used, and when, but not where. The public [=holder key=] is new for each
+    sign-in, so it can't link sign-ins together.
+* **Timing.** An [=issuer=] and an [=RP=] that collude can correlate sign-ins by time. Issuing
+    credentials ahead of time, rather than during sign-in, would make that harder.
+* **Collusion.** If the [=RP=] shows the [=delegated credential=] to the [=issuer=], the
+    [=issuer=] can recognize it (for example, by its signature or its salts). This specification
+    doesn't protect against an [=RP=] that colludes with the [=issuer=]. Zero-knowledge proofs
+    might.
+* **What the [=RP=] learns.** The [=RP=] learns the [=issuer=], the claims the user agreed to
+    disclose, and any claims that the [=issuer=] put in the clear. A stable identifier in the
+    clear, such as `sub`, lets [=RPs=] correlate the user across sites (the *RP Tracking
+    Problem*). [=Issuers=] SHOULD make every claim about the user selectively disclosable.
+* As in [[FEDCM]], the [=accounts endpoint=] is fetched with credentials but without revealing the
+    [=RP=], and the [=RP=] learns nothing until the user selects an account.
+
+Issue: How should an [=RP=] get a stable, but pairwise, identifier for the user, if the [=issuer=]
+doesn't know who the [=RP=] is?
+
+<!-- ============================================================ -->
+# Security considerations # {#security}
+<!-- ============================================================ -->
+
+* **Replay.** The key binding JWT binds the presentation to the [=RP=]'s origin (`aud`) and to its
+    {{IdentityProviderRequestOptions/nonce}}. An [=RP=] that receives a presentation meant for
+    another [=RP=] can't use it there, as long as [=RPs=] check `aud`, `nonce`, and `iat`.
+* **Holder key.** Only the user agent ever has the private [=holder key=], and only for the
+    duration of a sign-in. An attacker that steals a [=delegated credential=] from the [=issuer=]'s
+    response can't present it, because it can't sign the key binding JWT.
+* **Issuer trust.** As in [[FEDCM]], the [=RP=] decides which [=issuers=] it trusts. It MUST check
+    that `iss` is an [=issuer=] it trusts and verify the [=issuer=]'s signature.
+* **Disclosure.** The user agent only discloses the claims that the [=RP=] requested and the user
+    agreed to share. It can't hide claims that the [=issuer=] put in the clear.
+
+<!-- ============================================================ -->
+# Acknowledgements # {#acknowledgements}
+<!-- ============================================================ -->
+
+Thanks to the Federated Identity Community Group for their feedback on this proposal.

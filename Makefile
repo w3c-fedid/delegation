@@ -17,11 +17,12 @@ all: publish update-explainer-toc
 clean:
 	rm -rf build *~
 
-publish: build/index.html
+publish: index.html
 
 update-explainer-toc: README.md Makefile
 	doctoc $< --title "## Table of Contents" > /dev/null
 
-build/index.html: work-item.bs Makefile
-	mkdir -p build
+# HTML files are committed at the repository root so that GitHub Pages can
+# serve them directly.
+index.html: work-item.bs Makefile
 	bikeshed --die-on=warning spec $< $@
